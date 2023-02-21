@@ -1,26 +1,191 @@
 $root = "c:\temp\repos"
 
 function Main {
-    $criticalRepos = Get-BusinessCriticalRepos
-    $recentRepos = Get-RecentRepos
+    #$criticalRepos = Get-BusinessCriticalRepos
+    #$criticalRepos = Get-MockDataJson
+    #$recentRepos = Get-RecentRepos
+    #$allRepos = Get-AllRepos
     
-    New-Item -Type Directory -Force -Path $root
+    $allRepos = Get-DetailedRepos
 
-    Write-DepndencyReports -repos $criticalRepos 
-    Write-DepndencyReports -repos $criticalRepos 
-    
-    Write-Loc -repos $recentRepos -reportPrefix "recent"
-    Write-Loc -repos $criticalRepos -reportPrefix "critical"    
-    
-    Write-JenkinsFileReport -repos $criticalRepos -reportPrefix "critical"
-    Write-JenkinsFileReport -repos $recentRepos -reportPrefix "recent"
-    
-    Write-CommitsPerWeek -repos $criticalRepos -reportPrefix "critical"       
-    Write-CommitsPerWeek -repos $recentRepos -reportPrefix "recent"    
+    #Write-Loc -repos $criticalRepos -reportPrefix "loc_critical"
+
+    #New-Item -Type Directory -Force -Path $root
+   # Write-RepoScorecardReport -repos $criticalRepos -reportPrefix "test_critical"
+
+    #Write-RepoScorecardReportDetailed -repos $criticalRepos -reportPrefix "critical"
+
+    #Write-OwnershipReport -repos $criticalRepos -reportPrefix "critical"
+    Write-OwnershipReport -repos $allRepos -reportPrefix "all-owners"
+
+    #Write-DepndencyReports -repos $criticalRepos 
+    #Write-DepndencyReports -repos $criticalRepos 
+    #
+    #Write-Loc -repos $recentRepos -reportPrefix "recent"
+    #Write-Loc -repos $criticalRepos -reportPrefix "critical"    
+    #
+    #Write-JenkinsFileReport -repos $criticalRepos -reportPrefix "critical"
+    #Write-JenkinsFileReport -repos $recentRepos -reportPrefix "recent"
+    #
+    #Write-CommitsPerWeek -repos $criticalRepos -reportPrefix "critical"       
+    #Write-CommitsPerWeek -repos $recentRepos -reportPrefix "recent"    
    
 }
 
 
+function Write-OwnershipReport{
+    param($repos, $reportPrefix)
+
+    $report = "$root\$($reportPrefix)_summary_ownership.csv"        
+    $header = "Name,Team,Url,Last Push,Last Update,Archived,Disabled,Contributors`r`n"
+
+    New-Item -ItemType File -Force -Path $report -Value $header
+
+    $content = $repos | %{
+        $topics = $_.Topics -join ";"
+        "{0},{1},{2},{3},{4},{5},{6},{7}" -f $_.Name, $topics, $_.Url,$_.Pushed, $_.Updated, $_.Archived, $_.Disabled, $_.Contributors
+    }    
+
+    Add-Content -Path $report -Value $content
+   
+    Write-Output (gc $report)
+}
+
+function Write-RepoScorecardReport{
+    param (        
+        $repos,
+        $reportPrefix
+    )
+
+    $summaryReport = "$root\$($reportPrefix)_summary_scorecard.csv"        
+    $summaryHeader = "repo,score,topics,notes`r`n"
+
+    New-Item -ItemType File -Force -Path $summaryReport -Value $summaryHeader
+
+    $repos |%{
+        Add-RepoLocally -Repo $_
+        $summary = Get-RepoHealthScoreSummary -repo $_
+        Add-Content -Path $summaryReport -Value $summary
+    }
+
+    Write-Output (gc $summaryReport)
+     
+}
+
+function Get-RepoHealthScoreSummary{
+    param(        
+       $repo
+   )
+   
+   $format = "{0},{1},{2},{3}"
+   
+   $scorecard = ((gci -Path $repo.Path) | where {$_.Name -match '(scorecard|level\d)\.md'}).FullName
+   $topics = $repo.Topics -join ';'
+   
+   if(!$scorecard){
+       return $format -f $repo.Name, 0, $topics, 'no scorecard'
+   }
+   
+   $content = gc $scorecard
+
+   $total =  ($content -match '-\s*\[').Count
+   $completed = ($content -match '-\s*\[\s*[xX]\s*\]').Count
+   
+   $score = ($completed / $total) * 100
+
+   return $format -f $repo.Name, $score, $topics, ''
+}
+function Write-RepoScorecardReportDetailed{
+    param(
+        $repos,
+        $reportPrefix
+    )
+
+    
+    $details = $repos |%{
+        Add-RepoLocally -Repo $_ | Out-Null
+        Get-RepoHealthScoreDetailed -repo $_
+        
+    }
+    
+    $headers = @()
+
+    $report = ""
+
+    #write the headers
+    foreach($detail in $details){
+        foreach($key in $detail.Keys){
+            if(!$headers.Contains($key)){
+                $headers += ($key)
+                $report += "$($key.subString(0, [System.Math]::Min(100, $key.Length))),"
+            }           
+        }
+    }
+    
+    $report = $report.TrimEnd(',')
+    $report += "`r`n"
+        
+    #write the details
+    foreach($detail in $details){
+        foreach($column in $headers){            
+            if($detail.Contains($column)){
+                $report += "$($detail[$column].ToLower())"
+            }          
+            $report += ","
+        }
+
+        $report = $report.TrimEnd(',')
+        $report += "`r`n"       
+    }
+
+    $detailedReport = "$root\$($reportPrefix)_detailed_scorecard.csv"        
+    New-Item -ItemType File -Force -Path $detailedReport -Value $report
+
+    Write-Output (gc $detailedReport)
+    
+}
+function Get-RepoHealthScoreDetailed{
+    param(        
+       $repo
+   )
+   
+   $scorecard = ((gci -Path $repo.Path) | where {$_.Name -match '(scorecard|level\d)\.md'}).FullName
+   $topics = $repo.Topics -join ';'
+   
+   if(!$scorecard){
+       return @{Repo = $repo.Name; Topics=$topics; Notes="No scorecard"}
+   }
+   
+   $content = gc $scorecard
+
+   $deets = Get-RepoScoreDetails -content $content
+
+   $deets.Add("Repo", $repo.Name)
+   $deets.Add("Topics", $repo.Topics)
+   $deets.Add("Notes", "")
+
+   return $deets
+}
+
+function Get-RepoScoreDetails{
+    param(
+        $content
+    )
+
+    [regex]$expression = "\[(?<score>.*)\]\s*(?<desc>.*)"
+
+    $scores = @{}
+
+    foreach ($line in $content){        
+        $match = $expression.match($line)
+
+        if($match.Success){
+            $scores.Add($match.Groups['desc'].Value.Trim(), $match.Groups['score'].Value.Trim())
+        }
+    }
+    return $scores
+
+}
 function Write-JenkinsFileReport {
     param (        
         $repos,
@@ -40,8 +205,9 @@ function Write-JenkinsFileReport {
     $summary = ($f |%{ if(($_ | gc | select-string "jenkins-shared-lib-v2")){$($_.FullName.Replace("C:\temp\repos\", "").Split("\")[0] + "`r`n")}}) | Select -Unique
 
     $sum = $summary.Count
+    $total = $repos.Count
 
-    New-Item -ItemType File -Force -Path $summaryReport -Value "SUM : $sum`r`n`r`n $summary"
+    New-Item -ItemType File -Force -Path $summaryReport -Value "SUM : $sum/$total`r`n`r`n $summary"
 
 }
 
@@ -121,6 +287,80 @@ function Write-DepndencyReports{
     Add-Content -Path $summaryReport -Value "total,$($prsAll.Count)"
        
 }
+
+function Get-Topics{
+    param(
+        $repoName,
+        $orgName = "loyaltyone"
+    )
+
+    $allTopics = (gh api graphql -F owner=$orgName -F name=$repoName -f query='
+       query($name: String!, $owner: String!) {
+         repository(owner: $owner, name: $name) {
+           repositoryTopics(first: 10) {
+           edges {
+             node {
+               topic {
+                 name
+               }
+             }
+           }
+         }
+       }
+     }') | ConvertFrom-Json
+
+     $remove = '(?i)(business-critical|experimental)'
+
+     $topics = ($allTopics.data.repository.repositoryTopics.edges.node.topic.name) -notmatch $remove
+
+     return $topics
+    
+}
+
+
+ 
+function Get-Contributors{
+    param(
+        $repoName,
+        $repoOrg = "loyaltyone"
+    )
+
+    $allContributor = gh api "/repos/$orgName/$repoName/contributors" | ConvertFrom-Json
+
+    return $allContributor.login
+
+}
+function Add-RepoLocally{
+    param(
+        $repo
+    )
+
+    $originalPath = (gi .).FullName
+
+    if(!(Test-Path $repo.Path)){
+        git clone $repo.Url --depth=1 $repo.Path                
+    }
+
+    cd $repo.Path
+
+    $currentBranch = git branch --show-current
+    $defaultBranch = gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
+    
+    if($currentBranch -ne $defaultBranch){
+        git stash       
+    }
+
+    #git reset --hard origin/$defaultBranch
+    #git pull $defaultBranch
+
+    git fetch origin $defaultBranch
+    git merge -s recursive -X theirs origin/$defaultBranch
+
+
+    cd $originalPath
+}
+
+
 function Get-BusinessCriticalRepos {
     
     $criticalRepos = gh repo list loyaltyone --limit 2000 --topic "business-critical" `
@@ -131,11 +371,11 @@ function Get-BusinessCriticalRepos {
          Path = "$root\$($_.repo.Split('/')[1])"
          Date = $_.Date
          Repo = $_.Repo
+         Topics = (Get-Topics -repoName $_.repo.Split('/')[1] )
      }}
 
      return $criticalRepos
 }
-
 function Get-RecentRepos{
     $recentRepos = gh repo list loyaltyone --limit 2000 `
       | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date | Where-Object{$_.date -gt '2020-12-31'} `
@@ -149,6 +389,57 @@ function Get-RecentRepos{
 
      return $recentRepos
 }
+
+function Get-AllRepos{
+    $recentRepos = gh repo list loyaltyone --limit 2000 `
+      | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date `
+      | ForEach-Object{ [PSCustomObject]@{
+          Name = $_.repo.Split('/')[1]
+          Url = "https://github.com/$($_.repo)"
+          Path = "$root\$($_.repo.Split('/')[1])"
+          Date = $_.Date
+          Repo = $_.Repo
+          Topics = (Get-Topics -repoName $_.repo.Split('/')[1] )
+     }}
+
+     return $recentRepos
+}
+
+function Get-DetailedRepos{
+    param(
+        $orgName = "LoyaltyOne"
+    )
+
+    $i = 1
+    $repos = gh api "orgs/$orgName/repos?page=$i&per_page=100" | ConvertFrom-Json
+    $buffer = $repos
+    while($buffer){
+        $i = $i + 1
+        $buffer = gh api "orgs/$orgName/repos?page=$i&per_page=100" | ConvertFrom-Json       
+        $repos += $buffer
+    } 
+
+   $formatted =  $repos | ForEach-Object{
+        [PSCustomObject]@{
+            Name = $_.name
+            Url = $_.url
+            Path = "$root\$($_.name)"
+            Date = $_.pushed_at
+            Pushed = $_.pushed_at
+            Updated = $_.updated_at
+            Repo = $_.full_name
+            Topics = $_.topics
+            Archived = $_.archived
+            Disabled = $_.disabled
+            Contributors = $((gh api "repos/$orgName/$($_.name)/contributors" | ConvertFrom-Json).login -Join ";")
+        }
+
+    }
+
+    $formatted
+
+} 
+
 
 function Write-Loc {
     param (
@@ -179,6 +470,109 @@ function Write-Loc {
         
         Add-Content -Path $summaryReport -Value "$($repo.Name),$($repo.Date),$total"     
     }
+}
+
+
+function Get-MockDataJson{
+    [CmdletBinding()]
+    param(
+        [parameter(Position=0)]
+        [ValidateRange(1,10)]
+        [int]
+        $numItems = 10
+    )
+    
+
+
+       $data = ConvertFrom-Json '[{
+            "Name":  "transaction-summary-consumer",
+            "Url":  "https://github.com/LoyaltyOne/transaction-summary-consumer",
+            "Path":  "c:\\temp\\repos\\transaction-summary-consumer",
+            "Date":  "2022-11-22T18:05:28Z",
+            "Repo":  "LoyaltyOne/transaction-summary-consumer",
+            "Topics":  "teamfusion"
+        },
+        {
+            "Name":  "promotion-service",
+            "Url":  "https://github.com/LoyaltyOne/promotion-service",
+            "Path":  "c:\\temp\\repos\\promotion-service",
+            "Date":  "2022-11-22T16:32:19Z",
+            "Repo":  "LoyaltyOne/promotion-service",
+            "Topics":  "team-things"
+        },
+        {
+            "Name":  "aem-airmiles-web",
+            "Url":  "https://github.com/LoyaltyOne/aem-airmiles-web",
+            "Path":  "c:\\temp\\repos\\aem-airmiles-web",
+            "Date":  "2022-11-22T14:19:09Z",
+            "Repo":  "LoyaltyOne/aem-airmiles-web",
+            "Topics":  [
+                           "team-goat",
+                           "team-atsops"
+                       ]
+        },
+        {
+            "Name":  "airmiles-aem",
+            "Url":  "https://github.com/LoyaltyOne/airmiles-aem",
+            "Path":  "c:\\temp\\repos\\airmiles-aem",
+            "Date":  "2022-11-22T18:44:44Z",
+            "Repo":  "LoyaltyOne/airmiles-aem",
+            "Topics":  "team-goat"
+        },
+        {
+            "Name":  "airmiles-web-bff",
+            "Url":  "https://github.com/LoyaltyOne/airmiles-web-bff",
+            "Path":  "c:\\temp\\repos\\airmiles-web-bff",
+            "Date":  "2022-11-21T18:05:47Z",
+            "Repo":  "LoyaltyOne/airmiles-web-bff",
+            "Topics":  "team-goat"
+        },
+        {
+            "Name":  "auth0-pages",
+            "Url":  "https://github.com/LoyaltyOne/auth0-pages",
+            "Path":  "c:\\temp\\repos\\auth0-pages",
+            "Date":  "2022-11-21T16:31:22Z",
+            "Repo":  "LoyaltyOne/auth0-pages",
+            "Topics":  "team-goat"
+        },
+        {
+            "Name":  "rtc-amcash-infra",
+            "Url":  "https://github.com/LoyaltyOne/rtc-amcash-infra",
+            "Path":  "c:\\temp\\repos\\rtc-amcash-infra",
+            "Date":  "2022-11-21T15:47:43Z",
+            "Repo":  "LoyaltyOne/rtc-amcash-infra",
+            "Topics":  "mobsrus"
+        },
+        {
+            "Name":  "zoo",
+            "Url":  "https://github.com/LoyaltyOne/zoo",
+            "Path":  "c:\\temp\\repos\\zoo",
+            "Date":  "2022-11-22T16:20:15Z",
+            "Repo":  "LoyaltyOne/zoo",
+            "Topics":  "team-goat"
+        },
+        {
+            "Name":  "api-gateway-external-offer-state-api",
+            "Url":  "https://github.com/LoyaltyOne/api-gateway-external-offer-state-api",
+            "Path":  "c:\\temp\\repos\\api-gateway-external-offer-state-api",
+            "Date":  "2022-11-18T18:36:13Z",
+            "Repo":  "LoyaltyOne/api-gateway-external-offer-state-api",
+            "Topics":  "team-things"
+        },
+        {
+            "Name":  "notification-service-producer",
+            "Url":  "https://github.com/LoyaltyOne/notification-service-producer",
+            "Path":  "c:\\temp\\repos\\notification-service-producer",
+            "Date":  "2022-11-18T18:08:43Z",
+            "Repo":  "LoyaltyOne/notification-service-producer",
+            "Topics":  [
+                           "avengers",
+                           "notification-service"
+                       ]
+        }
+    ]'
+
+    return $data[0..($numItems - 1)]
 }
 
 Main
