@@ -1,63 +1,122 @@
 $root = "c:\temp\repos"
 
-function Main {
-    #$criticalRepos = Get-BusinessCriticalRepos
-    #$criticalRepos = Get-MockDataJson
-    #$recentRepos = Get-RecentRepos
-    #$allRepos = Get-AllRepos
-    
-    $allRepos = Get-DetailedRepos
+function Main{
+    #$d = Get-DetailedRepos
 
-    #Write-Loc -repos $criticalRepos -reportPrefix "loc_critical"
+    $data = Get-DataFromGraphQL -recentRepoCutoffDateInYears 1
 
-    #New-Item -Type Directory -Force -Path $root
-   # Write-RepoScorecardReport -repos $criticalRepos -reportPrefix "test_critical"
-
-    #Write-RepoScorecardReportDetailed -repos $criticalRepos -reportPrefix "critical"
-
-    #Write-OwnershipReport -repos $criticalRepos -reportPrefix "critical"
-    Write-OwnershipReport -repos $allRepos -reportPrefix "all-owners"
-
-    #Write-DepndencyReports -repos $criticalRepos 
-    #Write-DepndencyReports -repos $criticalRepos 
-    #
-    #Write-Loc -repos $recentRepos -reportPrefix "recent"
-    #Write-Loc -repos $criticalRepos -reportPrefix "critical"    
-    #
-    #Write-JenkinsFileReport -repos $criticalRepos -reportPrefix "critical"
-    #Write-JenkinsFileReport -repos $recentRepos -reportPrefix "recent"
-    #
-    #Write-CommitsPerWeek -repos $criticalRepos -reportPrefix "critical"       
-    #Write-CommitsPerWeek -repos $recentRepos -reportPrefix "recent"    
-   
 }
 
+function _Main {    
+    while(1){
+                    
+        $data = Get-DataFromMainPrompt
+
+        if($LASTEXITCODE -eq -1){
+            EXIT 0
+            break;
+        }
+
+        Invoke-ReportForPrompt -data $data
+
+        if($LASTEXITCODE -eq -1){
+            EXIT 0
+            break;
+        }
+    }  
+}
+
+function Get-DataFromMainPrompt{
+    
+    Write-Host "Would you like to use : "
+    Write-Host "1) Business critical repos"
+    Write-Host "2) Most recent repos"
+    Write-Host "3) All repos"
+    Write-Host "4) Use mock data"
+    Write-Host "5) No data needed"
+    Write-Host "6) Exit"
+    
+    $decision = Read-Host
+
+    $data = switch($decision){
+        1 { Get-BusinessCriticalRepos; break}        
+        2 { 
+            Write-Host "How many years back should we go"
+            $years = Read-Host 
+
+            Get-RecentRepos -yearsOld $years
+           }
+        3 { Get-AllRepos; break}
+        4 { Get-MockDataJson break}
+        5 { }
+        6 { EXIT = -1 }#no op on exit
+    }
+
+    return $data    
+}
+
+function Invoke-ReportForPrompt{
+    param(
+        $data
+    )
+    
+
+    while(1){
+        Write-Host "What would you like to run today?"
+
+        Write-Host "1) Scorecard summary report" 
+        Write-Host "2) Scorecard detailed report"       
+        Write-Host "3) Ownership report"  
+        Write-Host "4) Dependency report" 
+
+        Write-Host "5) Jenkinsfile report"
+        Write-Host "6) Commits per week report"
+        Write-Host "7) Lines of Code report" 
+        Write-Host "8) Exit"
+        Write-Host "9) Help"
+
+        $action = Read-Host
+
+        switch($action){
+            1 {Write-RepoScorecardReport -repos $data -reportName "($prefix)summary_scorecard_report.csv"; break}
+            2 {Write-RepoScorecardReportDetailed -repos $data -reportName "($prefix)detailed_scorecard_report.csv";break}
+            3 {Write-OwnershipReport -repos $data -reportName "($prefix)ownership_report.csv"; break}
+            4 {Write-DependencyReports -repos $data -reportName "($prefix)dependency_report.csv" ; break}
+            5 {Write-JenkinsFileReport -repos $data -reportName "jenkinsfile_report.txt"; break}
+            6 {Write-CommitsPerWeek -repos $data -reportName "commits_per_week_report.csv"; break}
+            7 {Write-Loc -repos $data -reportName "loc_report.csv"; break}
+            8 {EXIT -1; break}
+            9 {Write-Host "coming soon"}
+        }
+    }
+}
 
 function Write-OwnershipReport{
-    param($repos, $reportPrefix)
+    param($reportName)
 
-    $report = "$root\$($reportPrefix)_summary_ownership.csv"        
-    $header = "Name,Team,Url,Last Push,Last Update,Archived,Disabled,Contributors`r`n"
+    
+    $report = "$root\$($reportName)"        
+    $header = "Name,Team,Url,Last Push,Last Update,Archived,Disabled,Contributors,Languages`r`n"
 
     New-Item -ItemType File -Force -Path $report -Value $header
 
     $content = $repos | %{
         $topics = $_.Topics -join ";"
-        "{0},{1},{2},{3},{4},{5},{6},{7}" -f $_.Name, $topics, $_.Url,$_.Pushed, $_.Updated, $_.Archived, $_.Disabled, $_.Contributors
+        "{0},{1},{2},{3},{4},{5},{6},{7},{8}" -f $_.Name, $topics, $_.Url,$_.Pushed, $_.Updated, $_.Archived, $_.Disabled, $_.Contributors, $_.Languages
     }    
 
     Add-Content -Path $report -Value $content
    
-    Write-Output (gc $report)
+    Write-Host (gc $report)
 }
 
 function Write-RepoScorecardReport{
     param (        
         $repos,
-        $reportPrefix
+        $reportName
     )
 
-    $summaryReport = "$root\$($reportPrefix)_summary_scorecard.csv"        
+    $summaryReport = "$root\$($reportName)"        
     $summaryHeader = "repo,score,topics,notes`r`n"
 
     New-Item -ItemType File -Force -Path $summaryReport -Value $summaryHeader
@@ -68,7 +127,7 @@ function Write-RepoScorecardReport{
         Add-Content -Path $summaryReport -Value $summary
     }
 
-    Write-Output (gc $summaryReport)
+    Write-Host (gc $summaryReport)
      
 }
 
@@ -98,7 +157,7 @@ function Get-RepoHealthScoreSummary{
 function Write-RepoScorecardReportDetailed{
     param(
         $repos,
-        $reportPrefix
+        $reportName
     )
 
     
@@ -138,10 +197,10 @@ function Write-RepoScorecardReportDetailed{
         $report += "`r`n"       
     }
 
-    $detailedReport = "$root\$($reportPrefix)_detailed_scorecard.csv"        
+    $detailedReport = "$root\$($reportName)"        
     New-Item -ItemType File -Force -Path $detailedReport -Value $report
 
-    Write-Output (gc $detailedReport)
+    Write-Host (gc $detailedReport)
     
 }
 function Get-RepoHealthScoreDetailed{
@@ -189,12 +248,12 @@ function Get-RepoScoreDetails{
 function Write-JenkinsFileReport {
     param (        
         $repos,
-        $reportPrefix
+        $reportName
     )
     
 
-    $summaryReport = "$root\$($reportPrefix)_summary_jenkins.txt"        
-    $detailedReport = "$root\$($reportPrefix)_detailed_jenkins.txt"
+    $summaryReport = "$root\summary_$($reportName)"        
+    $detailedReport = "$root\detailed_$($reportName)"
     
     $f = gci -Path $repos.Path -Filter "jenkinsfile*" -recurse 
 
@@ -214,11 +273,11 @@ function Write-JenkinsFileReport {
 function Write-CommitsPerWeek{
     param(
         $repos,
-        $reportPrefix
+        $reportName
     )
 
     
-    $summaryReport = "$root\$($reportPrefix)_summary_commits.csv"
+    $summaryReport = "$root\$($reportName)"
         
     New-Item -ItemType File -Force -Path $summaryReport -Value "repo,average`r`n"
 
@@ -258,14 +317,14 @@ function Get-CommitsPerWeekForRepo{
     return "$repo.Name,$average`r`n" 
 }
 
-function Write-DepndencyReports{
+function Write-DependencyReports{
     param (
         $repos,
-        $reportPrefix
+        $reportName
     )
 
-    $detailedReport = "$root\$($reportPrefix)_detailed_dependencies.csv"
-    $summaryReport = "$root\$($reportPrefix)_summary_dependencies.csv"
+    $detailedReport = "$root\$($reportName)_detailed.csv"
+    $summaryReport = "$root\$($reportName)_summary.csv"
     
     New-Item -ItemType File -Force -Path $detailedReport -Value "repo,ref`r`n"
     New-Item -ItemType File -Force -Path $summaryReport -Value "repo,count`r`n"
@@ -330,6 +389,29 @@ function Get-Contributors{
     return $allContributor.login
 
 }
+
+function Get-Languages {
+    param(
+        $repoName,
+        $repoOrg = "loyaltyone"
+    )
+
+    $languages = Get-ApiSegment -segment "languages" -repoName $repoName -repoOrg $repoOrg
+
+    return $languages.psobject.properties.name -Join ";"
+}
+
+function Get-ApiSegment{
+    param(
+        $segment,
+        $repoName,
+        $repoOrg = "loyaltyone"
+    )
+    $segment = gh api "/repos/$orgName/$repoName/$segment" | ConvertFrom-Json
+
+    return $segment
+
+}
 function Add-RepoLocally{
     param(
         $repo
@@ -376,9 +458,15 @@ function Get-BusinessCriticalRepos {
 
      return $criticalRepos
 }
-function Get-RecentRepos{
+function _Get-RecentRepos{
+    param(
+        $yearsOld = 3
+    )
+
+    $cutoff = (Get-Date).AddYears(($yearsOld * -1))
+
     $recentRepos = gh repo list loyaltyone --limit 2000 `
-      | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date | Where-Object{$_.date -gt '2020-12-31'} `
+      | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date | Where-Object{$_.date -gt $cutoff} `
       | ForEach-Object{ [PSCustomObject]@{
           Name = $_.repo.Split('/')[1]
           Url = "https://github.com/$($_.repo)"
@@ -389,7 +477,15 @@ function Get-RecentRepos{
 
      return $recentRepos
 }
+function Get-RecentRepos{
+    param(
+        $yearsOld = 3
+    )
 
+    $data = Get-DataFromGraphQL -recentRepoCutoffDateInYears $yearsOld
+
+    return $data
+}
 function Get-AllRepos{
     $recentRepos = gh repo list loyaltyone --limit 2000 `
       | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date `
@@ -405,6 +501,96 @@ function Get-AllRepos{
      return $recentRepos
 }
 
+function Get-DataFromGraphQL{
+    param(
+    [string] $organization = "loyaltyone",
+    [decimal]$recentRepoCutoffDateInYears = 0,
+    [string]$topic = ""
+    )
+
+    $query = "`"org:$organization"
+
+    #if($recentRepoCutoffDateInYears){
+    #    $cutoff = (get-date).AddYears($recentRepoCutoffDateInYears *-1).ToString('yyyy-MM-ddTHH:mm:ss')
+    #    $query +=  " pushed:>$cutoff"
+    #}
+#
+    #if($topic){
+    #    $query += " topic:$topic"
+    #}
+
+   #$query += "`""
+#    $q = 'query{
+#        search(
+#          first: 100
+#          query: "org:loyaltyone"
+#          type: REPOSITORY
+#        ) {
+#          nodes {
+#         		   ... on Repository {
+#              name
+#              url
+#              pushedAt
+#              updatedAt
+#              nameWithOwner        
+#              isArchived
+#              isDisabled
+#              languages(first: 100) {
+#                nodes {
+#                  name
+#                }
+#              }
+#              collaborators(first: 100) {
+#                nodes {
+#                  name
+#                  login
+#                }
+#              }
+#            
+#             
+#            }
+#          }
+#        }
+#}'
+
+    $graph = "@query.graphql"
+
+   
+    $fieldMapping = '.data.organization.repositories.nodes[] | {
+        name, 
+        url, 
+        pushedAt, 
+        updatedAt, 
+        fullName, 
+        topics: .repositoryTopics.nodes[].name, 
+        archived: .isArchived, 
+        disabled: .isDisabled, 
+        languages: .languages.nodes[].name}'
+        #,contributors: .collaborators.nodes[].name}
+
+    $repos = gh api graphql --paginate -F query="$graph" --jq $fieldMapping `
+    | ConvertFrom-Json `
+    | ForEach-Object{   
+        [PSCustomObject]@{
+            Name = $_.name
+            Url = $_.url
+            Path = "$root\$($_.name)"
+            Date = $_.pushed_at
+            Pushed = $_.pushed_at
+            Updated = $_.updated_at
+            Repo = $_.full_name
+            Topics = $_.topics
+            Archived = $_.archived
+            Disabled = $_.disabled
+            #Contributors = $_.contributors
+            Languages = $_.languages
+        }    
+    }
+
+    return $repos
+}
+
+
 function Get-DetailedRepos{
     param(
         $orgName = "LoyaltyOne"
@@ -419,7 +605,7 @@ function Get-DetailedRepos{
         $repos += $buffer
     } 
 
-   $formatted =  $repos | ForEach-Object{
+   $formatted =  $repos | ForEach-Object{   
         [PSCustomObject]@{
             Name = $_.name
             Url = $_.url
@@ -431,7 +617,8 @@ function Get-DetailedRepos{
             Topics = $_.topics
             Archived = $_.archived
             Disabled = $_.disabled
-            Contributors = $((gh api "repos/$orgName/$($_.name)/contributors" | ConvertFrom-Json).login -Join ";")
+            Contributors = $((Get-Contributors -repoName $_.name) -Join ";")
+            Languages = $(Get-Languages -repoName $_.name )
         }
 
     }
@@ -444,11 +631,11 @@ function Get-DetailedRepos{
 function Write-Loc {
     param (
         $repos,
-        $reportPrefix
+        $reportName
     )
        
-    $detailedReport = "$root\$($reportPrefix)_detailed_results.csv"
-    $summaryReport = "$root\$($reportPrefix)_summary_results.csv"
+    $detailedReport = "$root\detailed_$($reportName)"
+    $summaryReport = "$root\summary_$($reportName)"
     
     New-Item -ItemType File -Force -Path $detailedReport -Value "repo,modified,files,language,blank,comment,code`r`n"
     New-Item -ItemType File -Force -Path $summaryReport -Value "repo,modified,time,loc`r`n"
