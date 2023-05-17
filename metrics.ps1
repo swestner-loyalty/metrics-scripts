@@ -1,13 +1,13 @@
 $root = "c:\temp\repos"
 
-function Main{
+function _Main{
     #$d = Get-DetailedRepos
 
     $data = Get-DataFromGraphQL -recentRepoCutoffDateInYears 1
 
 }
 
-function _Main {    
+function Main {    
     while(1){
                     
         $data = Get-DataFromMainPrompt
@@ -414,6 +414,7 @@ function Get-ApiSegment{
 }
 function Add-RepoLocally{
     param(
+        [Parameter(position=0, ValueFromPipeline)]
         $repo
     )
 
@@ -508,50 +509,18 @@ function Get-DataFromGraphQL{
     [string]$topic = ""
     )
 
-    $query = "`"org:$organization"
+    $filter = @("org:$organization")
 
-    #if($recentRepoCutoffDateInYears){
-    #    $cutoff = (get-date).AddYears($recentRepoCutoffDateInYears *-1).ToString('yyyy-MM-ddTHH:mm:ss')
-    #    $query +=  " pushed:>$cutoff"
-    #}
-#
-    #if($topic){
-    #    $query += " topic:$topic"
-    #}
+    if($recentRepoCutoffDateInYears){
+        $cutoff = (get-date).AddYears($recentRepoCutoffDateInYears *-1).ToString('yyyy-MM-ddTHH:mm:ss')
+        $filter +=  "pushed:>$cutoff"
+    }
 
-   #$query += "`""
-#    $q = 'query{
-#        search(
-#          first: 100
-#          query: "org:loyaltyone"
-#          type: REPOSITORY
-#        ) {
-#          nodes {
-#         		   ... on Repository {
-#              name
-#              url
-#              pushedAt
-#              updatedAt
-#              nameWithOwner        
-#              isArchived
-#              isDisabled
-#              languages(first: 100) {
-#                nodes {
-#                  name
-#                }
-#              }
-#              collaborators(first: 100) {
-#                nodes {
-#                  name
-#                  login
-#                }
-#              }
-#            
-#             
-#            }
-#          }
-#        }
-#}'
+    if($topic){
+        $filter += "topic:$topic"
+    }
+
+   
 
     $graph = "@query.graphql"
 
@@ -568,7 +537,8 @@ function Get-DataFromGraphQL{
         languages: .languages.nodes[].name}'
         #,contributors: .collaborators.nodes[].name}
 
-    $repos = gh api graphql --paginate -F query="$graph" --jq $fieldMapping `
+    $repos = gh api graphql --paginate -F query="$graph" -F filter=$($filter -Join " ") --jq $fieldMapping `
+    | gh merge-json `
     | ConvertFrom-Json `
     | ForEach-Object{   
         [PSCustomObject]@{
@@ -641,7 +611,8 @@ function Write-Loc {
     New-Item -ItemType File -Force -Path $summaryReport -Value "repo,modified,time,loc`r`n"
     
     foreach($repo in $repos){
-        git clone $repo.Url --depth=1 $repo.Path
+        
+        $repo | Add-RepoLocally
         
         cd $repo.Path
 

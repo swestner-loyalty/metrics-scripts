@@ -1,0 +1,7 @@
+site_name: '{repoName}'
+
+nav: 
+  {nav}
+
+plugins:
+  - techdocs-core

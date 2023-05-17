@@ -1,14 +1,9 @@
-query($endCursor: String, $filter: String!){
+query{
         search(
           first: 100
-          after:$endCursor
-          query: $filter
+          query: "org:loyaltyone"
           type: REPOSITORY
-        ){
-          pageInfo {
-            endCursor
-            hasNextPage
-          }
+        ) {
           nodes {
          		   ... on Repository {
               name
