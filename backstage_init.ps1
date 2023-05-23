@@ -1,12 +1,12 @@
 
-$debug = $true
+
 
 function Main{
 
     $includedFile = '*.md', 'swagger.yaml', 'swagger.json'
     $exludedFile = 'CHANGELOG.md','level?.md', 'scorecard*', 'PULL_REQUEST_TEMPLATE.md'
 
-    $repos = Get-Repos -businessCritical -mockData:$debug
+    $repos = Get-Repos -businessCritical -mockData
     $curDir = $PWD
 
     
@@ -14,17 +14,19 @@ function Main{
         Add-RepoLocally -repo $repo
         cd $repo.Path
 
-        $paths = Get-ChildItem -File -Recurse -Include $includedFile -Exclude  $exludedFile | Resolve-path -Relative |%{$_.TrimStart('.\')}
+        $paths = Get-ChildItem -File -Recurse -Include $includedFile -Exclude  $exludedFile | Resolve-path -Relative 
 
         $filesSystem = Get-FileHierarchy -paths $paths
-        $menu = Convert-ToMkdocsYaml -fileHierarchy $filesSystem    
-        Out-MkDocs -repo $repo -nav $menu  -dryRun:$debug
+        $menu = Convert-ToMkdocsYaml $filesSystem 
+    
+        Out-MkDocs -repo $repo -nav $menu
 
-        New-PullRequest $repo -dryRun:$debug
+        New-PullRequest $repo
 
         cd $curDir
 
     }
+
 }
 
 function Out-MkDocs{
@@ -32,25 +34,33 @@ function Out-MkDocs{
     [Parameter(ValueFromPipeline)]
     $nav,
     [Parameter(Position=0)]
-    $repo,
-    [Parameter(Position=1)]
-    [switch]$dryRun   
+    $repo   
     )
+
+    $templatePath = Join-Path $PSScriptRoot "template.yaml"
     
     $template = Get-YamlTemplate
     
     $content = $template.Replace('{repoName}', $repo.Name).Replace('{nav}', $nav)
-
-    if($dryRun){
-        return $content
-    }
     
     $savePath = Join-Path $repo.Path "mkdocs.yaml"
 
     $content | Out-File $savePath
 
 }
+function Get-YamlTemplate {
+    
+    return @'
+    site_name: '{repoName}'
 
+nav: 
+  {nav}
+
+plugins:
+  - techdocs-core
+'@
+    
+}
 function Get-FileHierarchy {
     param (
         [Parameter(Position = 0)]
@@ -78,11 +88,17 @@ function Get-FileHierarchy {
             $current = $current[$segment]
         }
 
-        $current['__path'] = $path
+        # Check if the current item is a directory
+        if (-not (Test-Path $path -PathType Container)) {
+            # If it's a file, add it as a value instead of a nested dictionary
+            $fileName = (Get-Item $path).Name
+            $current[$fileName] = $path
+        }
     }
 
     return $root
 }
+
 
 function Convert-ToMkdocsYaml {
     param (
@@ -220,13 +236,9 @@ function ConvertTo-TitleCase{
 
 function New-PullRequest{
     param(
-        $repo,
-        [switch]$dryRun
+        $repo
     )
 
-    if($dryRun){
-        return 
-    }
 
     $branch = 'backstage-setup'
     $prTitle = 'Backstage mkdocs Autogeneration'
@@ -310,19 +322,6 @@ function Get-Repos{
     return $mapped
 }
 
-function Get-YamlTemplate {
-    
-    return @'
-site_name: '{repoName}'
-
-nav: 
-  {nav}
-
-plugins:
-  - techdocs-core
-'@
-    
-}
 function Get-MockDataJson{
     [CmdletBinding()]
     param(
