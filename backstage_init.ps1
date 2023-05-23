@@ -1,27 +1,30 @@
-$global:includedFile = '*.md', 'swagger.yaml', 'swagger.json'
-$global:exludedFile = 'CHANGELOG.md','level?.md', 'scorecard*', 'PULL_REQUEST_TEMPLATE.md'
-$global:meaninglessFolderNames = "src","main","resources","docs","appendix", "external", "internal", ".git"
-$global:meaninglessFileNames = "_index", "readme"
+
+$debug = $true
 
 function Main{
- 
-    $repos = Get-Repos -businessCritical -mockData
+
+    $includedFile = '*.md', 'swagger.yaml', 'swagger.json'
+    $exludedFile = 'CHANGELOG.md','level?.md', 'scorecard*', 'PULL_REQUEST_TEMPLATE.md'
+
+    $repos = Get-Repos -businessCritical -mockData:$debug
     $curDir = $PWD
 
     
     foreach($repo in $repos){
-        #Add-RepoLocally -repo $repo
+        Add-RepoLocally -repo $repo
         cd $repo.Path
 
-        $paths = Get-ChildItem -File -Recurse -Include $global:includedFile -Exclude  $global:exludedFile | Resolve-path -Relative |%{$_.TrimStart('.\')}
+        $paths = Get-ChildItem -File -Recurse -Include $includedFile -Exclude  $exludedFile | Resolve-path -Relative |%{$_.TrimStart('.\')}
+
         $filesSystem = Get-FileHierarchy -paths $paths
-        $res = Convert-ToMkdocsYaml $filesSystem    
-        $res | Out-MkDocs $repo.Name $repo.Path
+        $menu = Convert-ToMkdocsYaml -fileHierarchy $filesSystem    
+        Out-MkDocs -repo $repo -nav $menu  -dryRun:$debug
+
+        New-PullRequest $repo -dryRun:$debug
 
         cd $curDir
 
     }
-
 }
 
 function Out-MkDocs{
@@ -29,18 +32,21 @@ function Out-MkDocs{
     [Parameter(ValueFromPipeline)]
     $nav,
     [Parameter(Position=0)]
-    $repoName,
+    $repo,
     [Parameter(Position=1)]
-    $path
+    [switch]$dryRun   
     )
+    
+    $template = Get-YamlTemplate
+    
+    $content = $template.Replace('{repoName}', $repo.Name).Replace('{nav}', $nav)
 
-    $templatePath = Join-Path $PSScriptRoot "template.yaml"
+    if($dryRun){
+        return $content
+    }
     
-    $template = Get-Content $templatePath
-    
-    $content = $template.Replace('{repoName}', $repoName).Replace('{nav}', $nav)
-    
-    $savePath = Join-Path $path "mkdocs.yaml"
+    $savePath = Join-Path $repo.Path "mkdocs.yaml"
+
     $content | Out-File $savePath
 
 }
@@ -52,6 +58,8 @@ function Get-FileHierarchy {
         $paths
     )
 
+    $meaninglessFolderNames = "src","main","resources","docs","appendix", "external", "internal", ".git"
+    
     $root = @{}
 
     foreach ($path in $paths) {
@@ -59,7 +67,7 @@ function Get-FileHierarchy {
 
         $current = $root
         foreach ($segment in $segments) {
-            if ($global:meaninglessFolderNames.Contains($segment)) {
+            if ($meaninglessFolderNames.Contains($segment)) {
                 continue
             }
 
@@ -75,7 +83,6 @@ function Get-FileHierarchy {
 
     return $root
 }
-
 
 function Convert-ToMkdocsYaml {
     param (
@@ -124,7 +131,7 @@ function Convert-ToMkdocsYaml {
     }
 
     # Recursive function to build the YAML string
-    function Build-Yaml {
+    function Invoke-BuildYaml {
         param (
             [Parameter(Position = 0)]
             [hashtable]
@@ -164,167 +171,15 @@ function Convert-ToMkdocsYaml {
 
             $subHierarchy = $hierarchy[$key] | Where-Object { $_ -is [hashtable] }
             if ($subHierarchy) {
-                Build-Yaml -hierarchy $subHierarchy -parentKey $currentKey -basePath $relativePath -indentLevel ($indentLevel + 1)
+                Invoke-BuildYaml -hierarchy $subHierarchy -parentKey $currentKey -basePath $relativePath -indentLevel ($indentLevel + 1)
             }
         }
     }
 
-    Build-Yaml -hierarchy $fileHierarchy
+    Invoke-BuildYaml -hierarchy $fileHierarchy
 
     return $yamlBuilder.ToString()
 }
-
-function _Get-FileHierarchy {
-    param (
-        [Parameter(Position = 0)]
-        [string[]]
-        $paths
-    )
-
-    $root = @{}
-
-    foreach ($path in $paths) {
-        $segments = $path -split '\\'
-        $current = $root
-
-        for ($i = 0; $i -lt $segments.Length - 1; $i++) {
-            $segment = $segments[$i]
-
-            if ($global:meaninglessFolderNames -contains $segment) {
-                continue
-            }
-
-            if (-not $current.ContainsKey($segment)) {
-                $current[$segment] = @{}
-            }
-
-            $current = $current[$segment]
-        }
-
-        $fileLeaf = $segments[-1]
-        if ($fileLeaf) {
-            if (-not $current.ContainsKey('__files')) {
-                $current['__files'] = @()
-            }
-            $current['__files'] += $fileLeaf
-        }
-    }
-
-    return $root
-}
-function _Convert-ToMkdocsYaml {
-    param (
-        [Parameter(Position = 0)]
-        [hashtable]
-        $fileHierarchy
-    )
-
-    $yamlBuilder = [System.Text.StringBuilder]::new()
-
-    # Helper function to indent the YAML content
-    function Add-Indent {
-        param (
-            [Parameter(Position = 0)]
-            [int]
-            $indentLevel
-        )
-
-        $indent = ' ' * ($indentLevel * 2)
-        $yamlBuilder.AppendLine($indent)
-    }
-
-    # Recursive function to build the YAML string
-    function Build-Yaml {
-        param (
-            [Parameter(Position = 0)]
-            [hashtable]
-            $hierarchy,
-            
-            [Parameter(Position = 1)]
-            [int]
-            $indentLevel = 0
-        )
-
-        foreach ($key in $hierarchy.Keys) {
-            if ($key -eq '__files') {
-                $files = $hierarchy[$key]
-                if ($files) {
-                    Add-Indent -indentLevel $indentLevel
-                    $yamlBuilder.Append('files:')
-                    Add-Indent -indentLevel ($indentLevel + 1)
-                    $yamlBuilder.Append('- ')
-                    $yamlBuilder.AppendLine($files -join ', ')
-                }
-            }
-            else {
-                Add-Indent -indentLevel $indentLevel
-                $yamlBuilder.Append("$key`:")
-                Build-Yaml -hierarchy $hierarchy[$key] -indentLevel ($indentLevel + 1)
-            }
-        }
-    }
-
-    Build-Yaml -hierarchy $fileHierarchy
-
-    return $yamlBuilder.ToString()
-}
-function ConvertTo-YamlLines {
-        param (
-            
-            [Hashtable]$data,            
-            [int]$indentLevel,           
-            [string]$output
-        )
-
-        foreach ($key in $Data.Keys) {
-            $value = $data[$key]
-
-            $indentation = ' ' * $indentLevel
-            $line = "${indentation}- ${key}:"
-
-            $output += $line
-
-            if ($value -is [Hashtable]) {
-                ConvertTo-YamlLines -Data $value -IndentLevel ($indentLevel + 2)
-            }
-            else {
-                $valueIndentation = ' ' * ($indentLevel + 2)
-                $valueLine = "${valueIndentation}${value}"
-                $output += $valueLine
-            }
-        }
-
-        return $output
-    }
-function Write-Navigation{
-    param($docs)
-
-    $content = ""
-
-    
-    foreach($docs in $docs){
-
-    }
-}
-
-function Get-MeaningfulName{
-    param(
-        [Parameter(position=0, ValueFromPipeline)]
-        $path
-        )
-        
-        $filename = [System.IO.Path]::GetFileNameWithoutExtension($path)
-  
-        
-        if ($global:meaninglessFileNames.Contains($filename)) {
-            return $path | Get-FilenameFromPath            
-        }
-
-        $name = $path | Get-NameFromFileName
-
-        return $name
-}
-
 
 function Get-FormattedName{
     param(
@@ -332,64 +187,14 @@ function Get-FormattedName{
         $name
         )
 
-        #$regex = '((?<pre>.*?)(?<readme>README)(?<post>.*)|(?<name>.*))'
-
-
         $name = switch -Regex ($name){
-                     '(?i)^README\.md$'{ "Home";break }
+                     '(?i)^(README|_index)\.md$'{ "Home";break }
                      '(?i)^(?<name>.+)README\.md' {$matches["name"];break}
                      '(?i)^README(?<name>.+)\.md'  {$matches["name"];break}
                      '(?i)(?<name>.*)' {$matches["name"];break}
                  }
 
         return $name | ConvertTo-TitleCase | ConvertTo-ReadableFormat
-}
-function Get-NameFromPath{
-    param(
-        [Parameter(position=0, ValueFromPipeline)]
-        $path
-        )
-
-        $curDir = $path | Split-Path -Parent 
-           
-        $name = do{                
-            $meaningful = !$global:meaninglessFolderNames.Contains($curDir)
-
-            if($meaningful){
-                return $curDir
-            }
-                            
-            $curDir = $curDir | Split-Path -Parent
-
-        }while(!$meaningful)
-        
-        return $name | ConvertTo-TitleCase | ConvertTo-ReadableFormat
-}
-function ConvertTo-MenuItem{
-    param(
-        [Parameter(position=0, ValueFromPipeline)]
-        $toConvert
-        )
-
-        #if is base path, add as home
-        #if a sub folder, 
-            #readme is a compound word ? use the compound word as nav title
-            #otherwise use parent directory name 
-
-        $root = $toConvert.Split('\')[1]
-        $parent = $toConvert | Split-Path -Parent
-        $fileName = $toConvert | Split-Path -Leaf
-        
-
-        
-        if($parent -eq $root){
-            return "- Home: `'$($fileName | Convert-ToTitleCase | ConvertTo-ReadableFormat)`'"
-        }
-        
-        if($file -notmatch 'README\.md'){
-            
-        }
-    
 }
 
 function ConvertTo-ReadableFormat{
@@ -413,6 +218,34 @@ function ConvertTo-TitleCase{
     return (Get-Culture).TextInfo.ToTitleCase($toConvert.ToLower())
 }
 
+function New-PullRequest{
+    param(
+        $repo,
+        [switch]$dryRun
+    )
+
+    if($dryRun){
+        return 
+    }
+
+    $branch = 'backstage-setup'
+    $prTitle = 'Backstage mkdocs Autogeneration'
+    $prMessage = 'Collects all mds in a repository and creates a menu system based on the directory structure to autogenerated mkdoc file'
+
+    $originalPath = (gi .).FullName
+    cd $repo.Path
+    
+    $defaultBranch = gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
+
+    git checkout -b $branch
+    git add --all
+    git commit -am $prMessage
+    git push origin 'backstage-setup'
+
+    gh pr create --base $defaultBranch --head $branch --title $prMessage --body $prMessage 
+}
+
+
 function Add-RepoLocally{
     param(
         $repo
@@ -428,21 +261,19 @@ function Add-RepoLocally{
 
     $currentBranch = git branch --show-current
     $defaultBranch = gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
-    
+
+    #if we want to rip out gh, we could probably use something like the below line to get the default branch since we are cloning all the repos we are opertaing on (vs authoring them)
+    #git symbolic-ref --short refs/remotes/origin/HEAD
+
     if($currentBranch -ne $defaultBranch){
         git stash       
     }
 
-    #git reset --hard origin/$defaultBranch
-    #git pull $defaultBranch
-
     git fetch origin $defaultBranch
     git merge -s recursive -X theirs origin/$defaultBranch
 
-
     cd $originalPath
 }
-
 
 function Get-Repos{
     param(
@@ -479,6 +310,19 @@ function Get-Repos{
     return $mapped
 }
 
+function Get-YamlTemplate {
+    
+    return @'
+site_name: '{repoName}'
+
+nav: 
+  {nav}
+
+plugins:
+  - techdocs-core
+'@
+    
+}
 function Get-MockDataJson{
     [CmdletBinding()]
     param(
@@ -489,94 +333,107 @@ function Get-MockDataJson{
     )
 
        $data = ConvertFrom-Json '[ {
-        "Name":  "airmiles-aem",
-        "Url":  "https://github.com/LoyaltyOne/airmiles-aem",
-        "Path":  "c:\\temp\\repos\\airmiles-aem",
+        "Name":  "API-Guidelines",
+        "Url":  "https://github.com/LoyaltyOne/API-Guidelines",
+        "Path":  "c:\\temp\\repos\\API-Guidelines",
         "Date":  "2022-11-22T18:44:44Z",
-        "Repo":  "LoyaltyOne/airmiles-aem",
-        "Topics":  "team-goat"
-        },
-        {
-            "Name":  "transaction-summary-consumer",
-            "Url":  "https://github.com/LoyaltyOne/transaction-summary-consumer",
-            "Path":  "c:\\temp\\repos\\transaction-summary-consumer",
-            "Date":  "2022-11-22T18:05:28Z",
-            "Repo":  "LoyaltyOne/transaction-summary-consumer",
-            "Topics":  "teamfusion"
-        },
-        {
-            "Name":  "promotion-service",
-            "Url":  "https://github.com/LoyaltyOne/promotion-service",
-            "Path":  "c:\\temp\\repos\\promotion-service",
-            "Date":  "2022-11-22T16:32:19Z",
-            "Repo":  "LoyaltyOne/promotion-service",
-            "Topics":  "team-things"
-        },
-        {
-            "Name":  "aem-airmiles-web",
-            "Url":  "https://github.com/LoyaltyOne/aem-airmiles-web",
-            "Path":  "c:\\temp\\repos\\aem-airmiles-web",
-            "Date":  "2022-11-22T14:19:09Z",
-            "Repo":  "LoyaltyOne/aem-airmiles-web",
-            "Topics":  [
-                           "team-goat",
-                           "team-atsops"
-                       ]
-        },
-       
-        {
-            "Name":  "airmiles-web-bff",
-            "Url":  "https://github.com/LoyaltyOne/airmiles-web-bff",
-            "Path":  "c:\\temp\\repos\\airmiles-web-bff",
-            "Date":  "2022-11-21T18:05:47Z",
-            "Repo":  "LoyaltyOne/airmiles-web-bff",
-            "Topics":  "team-goat"
-        },
-        {
-            "Name":  "auth0-pages",
-            "Url":  "https://github.com/LoyaltyOne/auth0-pages",
-            "Path":  "c:\\temp\\repos\\auth0-pages",
-            "Date":  "2022-11-21T16:31:22Z",
-            "Repo":  "LoyaltyOne/auth0-pages",
-            "Topics":  "team-goat"
-        },
-        {
-            "Name":  "rtc-amcash-infra",
-            "Url":  "https://github.com/LoyaltyOne/rtc-amcash-infra",
-            "Path":  "c:\\temp\\repos\\rtc-amcash-infra",
-            "Date":  "2022-11-21T15:47:43Z",
-            "Repo":  "LoyaltyOne/rtc-amcash-infra",
-            "Topics":  "mobsrus"
-        },
-        {
-            "Name":  "zoo",
-            "Url":  "https://github.com/LoyaltyOne/zoo",
-            "Path":  "c:\\temp\\repos\\zoo",
-            "Date":  "2022-11-22T16:20:15Z",
-            "Repo":  "LoyaltyOne/zoo",
-            "Topics":  "team-goat"
-        },
-        {
-            "Name":  "api-gateway-external-offer-state-api",
-            "Url":  "https://github.com/LoyaltyOne/api-gateway-external-offer-state-api",
-            "Path":  "c:\\temp\\repos\\api-gateway-external-offer-state-api",
-            "Date":  "2022-11-18T18:36:13Z",
-            "Repo":  "LoyaltyOne/api-gateway-external-offer-state-api",
-            "Topics":  "team-things"
-        },
-        {
-            "Name":  "notification-service-producer",
-            "Url":  "https://github.com/LoyaltyOne/notification-service-producer",
-            "Path":  "c:\\temp\\repos\\notification-service-producer",
-            "Date":  "2022-11-18T18:08:43Z",
-            "Repo":  "LoyaltyOne/notification-service-producer",
-            "Topics":  [
-                           "avengers",
-                           "notification-service"
-                       ]
-        }
-    ]'
+        "Repo":  "LoyaltyOne/API-Guidelines",
+        "Topics":  ""
+       }]'
 
+
+
+    #    "Name":  "airmiles-aem",
+    #    "Url":  "https://github.com/LoyaltyOne/airmiles-aem",
+    #    "Path":  "c:\\temp\\repos\\airmiles-aem",
+    #    "Date":  "2022-11-22T18:44:44Z",
+    #    "Repo":  "LoyaltyOne/airmiles-aem",
+    #    "Topics":  "team-goat"
+    #    }
+    #},
+      #  
+      #  ,
+      #  {
+      #      "Name":  "transaction-summary-consumer",
+      #      "Url":  "https://github.com/LoyaltyOne/transaction-summary-consumer",
+      #      "Path":  "c:\\temp\\repos\\transaction-summary-consumer",
+      #      "Date":  "2022-11-22T18:05:28Z",
+      #      "Repo":  "LoyaltyOne/transaction-summary-consumer",
+      #      "Topics":  "teamfusion"
+      #  },
+      #  {
+      #      "Name":  "promotion-service",
+      #      "Url":  "https://github.com/LoyaltyOne/promotion-service",
+      #      "Path":  "c:\\temp\\repos\\promotion-service",
+      #      "Date":  "2022-11-22T16:32:19Z",
+      #      "Repo":  "LoyaltyOne/promotion-service",
+      #      "Topics":  "team-things"
+      #  },
+      #  {
+      #      "Name":  "aem-airmiles-web",
+      #      "Url":  "https://github.com/LoyaltyOne/aem-airmiles-web",
+      #      "Path":  "c:\\temp\\repos\\aem-airmiles-web",
+      #      "Date":  "2022-11-22T14:19:09Z",
+      #      "Repo":  "LoyaltyOne/aem-airmiles-web",
+      #      "Topics":  [
+      #                     "team-goat",
+      #                     "team-atsops"
+      #                 ]
+      #  },
+      # 
+      #  {
+      #      "Name":  "airmiles-web-bff",
+      #      "Url":  "https://github.com/LoyaltyOne/airmiles-web-bff",
+      #      "Path":  "c:\\temp\\repos\\airmiles-web-bff",
+      #      "Date":  "2022-11-21T18:05:47Z",
+      #      "Repo":  "LoyaltyOne/airmiles-web-bff",
+      #      "Topics":  "team-goat"
+      #  },
+      #  {
+      #      "Name":  "auth0-pages",
+      #      "Url":  "https://github.com/LoyaltyOne/auth0-pages",
+      #      "Path":  "c:\\temp\\repos\\auth0-pages",
+      #      "Date":  "2022-11-21T16:31:22Z",
+      #      "Repo":  "LoyaltyOne/auth0-pages",
+      #      "Topics":  "team-goat"
+      #  },
+      #  {
+      #      "Name":  "rtc-amcash-infra",
+      #      "Url":  "https://github.com/LoyaltyOne/rtc-amcash-infra",
+      #      "Path":  "c:\\temp\\repos\\rtc-amcash-infra",
+      #      "Date":  "2022-11-21T15:47:43Z",
+      #      "Repo":  "LoyaltyOne/rtc-amcash-infra",
+      #      "Topics":  "mobsrus"
+      #  },
+      #  {
+      #      "Name":  "zoo",
+      #      "Url":  "https://github.com/LoyaltyOne/zoo",
+      #      "Path":  "c:\\temp\\repos\\zoo",
+      #      "Date":  "2022-11-22T16:20:15Z",
+      #      "Repo":  "LoyaltyOne/zoo",
+      #      "Topics":  "team-goat"
+      #  },
+      #  {
+      #      "Name":  "api-gateway-external-offer-state-api",
+      #      "Url":  "https://github.com/LoyaltyOne/api-gateway-external-offer-state-api",
+      #      "Path":  "c:\\temp\\repos\\api-gateway-external-offer-state-api",
+      #      "Date":  "2022-11-18T18:36:13Z",
+      #      "Repo":  "LoyaltyOne/api-gateway-external-offer-state-api",
+      #      "Topics":  "team-things"
+      #  },
+      #  {
+      #      "Name":  "notification-service-producer",
+      #      "Url":  "https://github.com/LoyaltyOne/notification-service-producer",
+      #      "Path":  "c:\\temp\\repos\\notification-service-producer",
+      #      "Date":  "2022-11-18T18:08:43Z",
+      #      "Repo":  "LoyaltyOne/notification-service-producer",
+      #      "Topics":  [
+      #                     "avengers",
+      #                     "notification-service"
+      #                 ]
+      #  }
+    #]
+#
     return $data[0..($numItems - 1)]
 }
 
