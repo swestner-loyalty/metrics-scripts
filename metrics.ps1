@@ -1,13 +1,13 @@
 $root = "c:\temp\repos"
 
-function _Main{
+function Main{
     #$d = Get-DetailedRepos
 
     $data = Get-DataFromGraphQL -recentRepoCutoffDateInYears 1
 
 }
 
-function Main {    
+function _Main {    
     while(1){
                     
         $data = Get-DataFromMainPrompt
@@ -524,17 +524,10 @@ function Get-DataFromGraphQL{
 
     $graph = "@query.graphql"
 
+    #topics: .repositoryTopics.nodes[].name, 
    
     $fieldMapping = '.data.organization.repositories.nodes[] | {
-        name, 
-        url, 
-        pushedAt, 
-        updatedAt, 
-        fullName, 
-        topics: .repositoryTopics.nodes[].name, 
-        archived: .isArchived, 
-        disabled: .isDisabled, 
-        languages: .languages.nodes[].name}'
+        name}'
         #,contributors: .collaborators.nodes[].name}
 
     $repos = gh api graphql --paginate -F query="$graph" -F filter=$($filter -Join " ") --jq $fieldMapping `
