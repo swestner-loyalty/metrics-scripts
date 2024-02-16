@@ -39,14 +39,14 @@ function Get-DataFromMainPrompt{
     $decision = Read-Host
 
     $data = switch($decision){
-        1 { Get-BusinessCriticalRepos; break}        
+        1 { Get-DataFromGraphQL -topic 'business-critical' ; break}        
         2 { 
             Write-Host "How many years back should we go"
             $years = Read-Host 
 
-            Get-RecentRepos -yearsOld $years
+            Get-DataFromGraphQL -recentRepoCutoffDateInYears $years
            }
-        3 { Get-AllRepos; break}
+        3 { Get-DataFromGraphQL break}
         4 { Get-MockDataJson break}
         5 { }
         6 { EXIT = -1 }#no op on exit
@@ -245,12 +245,15 @@ function Get-RepoScoreDetails{
     return $scores
 
 }
+
+
 function Write-JenkinsFileReport {
     param (        
         $repos,
         $reportName
     )
     
+    $repos |% { $_ | Add-RepoLocally}
 
     $summaryReport = "$root\summary_$($reportName)"        
     $detailedReport = "$root\detailed_$($reportName)"
@@ -347,71 +350,7 @@ function Write-DependencyReports{
        
 }
 
-function Get-Topics{
-    param(
-        $repoName,
-        $orgName = "loyaltyone"
-    )
 
-    $allTopics = (gh api graphql -F owner=$orgName -F name=$repoName -f query='
-       query($name: String!, $owner: String!) {
-         repository(owner: $owner, name: $name) {
-           repositoryTopics(first: 10) {
-           edges {
-             node {
-               topic {
-                 name
-               }
-             }
-           }
-         }
-       }
-     }') | ConvertFrom-Json
-
-     $remove = '(?i)(business-critical|experimental)'
-
-     $topics = ($allTopics.data.repository.repositoryTopics.edges.node.topic.name) -notmatch $remove
-
-     return $topics
-    
-}
-
-
- 
-function Get-Contributors{
-    param(
-        $repoName,
-        $repoOrg = "loyaltyone"
-    )
-
-    $allContributor = gh api "/repos/$orgName/$repoName/contributors" | ConvertFrom-Json
-
-    return $allContributor.login
-
-}
-
-function Get-Languages {
-    param(
-        $repoName,
-        $repoOrg = "loyaltyone"
-    )
-
-    $languages = Get-ApiSegment -segment "languages" -repoName $repoName -repoOrg $repoOrg
-
-    return $languages.psobject.properties.name -Join ";"
-}
-
-function Get-ApiSegment{
-    param(
-        $segment,
-        $repoName,
-        $repoOrg = "loyaltyone"
-    )
-    $segment = gh api "/repos/$orgName/$repoName/$segment" | ConvertFrom-Json
-
-    return $segment
-
-}
 function Add-RepoLocally{
     param(
         [Parameter(position=0, ValueFromPipeline)]
@@ -444,67 +383,10 @@ function Add-RepoLocally{
 }
 
 
-function Get-BusinessCriticalRepos {
-    
-    $criticalRepos = gh repo list loyaltyone --limit 2000 --topic "business-critical" `
-    | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date `
-    | ForEach-Object{ [PSCustomObject]@{
-         Name = $_.repo.Split('/')[1]
-         Url = "https://github.com/$($_.repo)"
-         Path = "$root\$($_.repo.Split('/')[1])"
-         Date = $_.Date
-         Repo = $_.Repo
-         Topics = (Get-Topics -repoName $_.repo.Split('/')[1] )
-     }}
-
-     return $criticalRepos
-}
-function _Get-RecentRepos{
-    param(
-        $yearsOld = 3
-    )
-
-    $cutoff = (Get-Date).AddYears(($yearsOld * -1))
-
-    $recentRepos = gh repo list loyaltyone --limit 2000 `
-      | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date | Where-Object{$_.date -gt $cutoff} `
-      | ForEach-Object{ [PSCustomObject]@{
-          Name = $_.repo.Split('/')[1]
-          Url = "https://github.com/$($_.repo)"
-          Path = "$root\$($_.repo.Split('/')[1])"
-          Date = $_.Date
-          Repo = $_.Repo
-     }}
-
-     return $recentRepos
-}
-function Get-RecentRepos{
-    param(
-        $yearsOld = 3
-    )
-
-    $data = Get-DataFromGraphQL -recentRepoCutoffDateInYears $yearsOld
-
-    return $data
-}
-function Get-AllRepos{
-    $recentRepos = gh repo list loyaltyone --limit 2000 `
-      | ConvertFrom-Csv -Delimiter "`t" -header repo,desc,status,date `
-      | ForEach-Object{ [PSCustomObject]@{
-          Name = $_.repo.Split('/')[1]
-          Url = "https://github.com/$($_.repo)"
-          Path = "$root\$($_.repo.Split('/')[1])"
-          Date = $_.Date
-          Repo = $_.Repo
-          Topics = (Get-Topics -repoName $_.repo.Split('/')[1] )
-     }}
-
-     return $recentRepos
-}
 
 function Get-DataFromGraphQL{
     param(
-    [string] $organization = "loyaltyone",
+    [string] $organization = "AirMilesLoyaltyInc",
     [decimal]$recentRepoCutoffDateInYears = 0,
     [string]$topic = ""
     )
@@ -520,43 +402,30 @@ function Get-DataFromGraphQL{
         $filter += "topic:$topic"
     }
 
-   
+    $graph =  Join-Path -Path $PSScriptRoot -ChildPath "metrics.graphql"
 
-    $graph = "@query.graphql"
-
-   
-    $fieldMapping = '.data.organization.repositories.nodes[] | {
-        name, 
-        url, 
-        pushedAt, 
-        updatedAt, 
-        fullName, 
-        topics: .repositoryTopics.nodes[].name, 
-        archived: .isArchived, 
-        disabled: .isDisabled, 
-        languages: .languages.nodes[].name}'
-        #,contributors: .collaborators.nodes[].name}
-
-    $repos = gh api graphql --paginate -F query="$graph" -F filter=$($filter -Join " ") --jq $fieldMapping `
+    $results = gh api graphql --paginate -F query="@$graph" -F filter=$($filter -Join " ") `
     | gh merge-json `
-    | ConvertFrom-Json `
-    | ForEach-Object{   
+    | ConvertFrom-Json 
+
+    $nodes = $results.data.search.nodes
+
+    $repos = $nodes | ForEach-Object{      
         [PSCustomObject]@{
             Name = $_.name
             Url = $_.url
             Path = "$root\$($_.name)"
-            Date = $_.pushed_at
-            Pushed = $_.pushed_at
-            Updated = $_.updated_at
-            Repo = $_.full_name
-            Topics = $_.topics
-            Archived = $_.archived
-            Disabled = $_.disabled
+            Date = $_.pushedAt
+            Pushed = $_.pushedAt
+            Updated = $_.updatedAt
+            Repo = $_.nameWithOwner
+            Topics = $_.repositoryTopics.edges.node.topic.name
+            Archived = $_.isArchived
+            Disabled = $_.isDisabled
             #Contributors = $_.contributors
-            Languages = $_.languages
+            Languages = $_.languages.nodes.names
         }    
     }
-
     return $repos
 }
 
