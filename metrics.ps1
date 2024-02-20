@@ -82,7 +82,7 @@ function Invoke-ReportForPrompt{
             2 {Write-RepoScorecardReportDetailed -repos $data -reportName "($prefix)detailed_scorecard_report.csv";break}
             3 {Write-OwnershipReport -repos $data -reportName "($prefix)ownership_report.csv"; break}
             4 {Write-DependencyReports -repos $data -reportName "($prefix)dependency_report.csv" ; break}
-            5 {Write-JenkinsFileReport -repos $data -reportName "jenkinsfile_report.txt"; break}
+            5 {Write-JenkinsCsvReport -repos $data -reportName "jenkinsfile_report.txt"; break}
             6 {Write-CommitsPerWeek -repos $data -reportName "commits_per_week_report.csv"; break}
             7 {Write-Loc -repos $data -reportName "loc_report.csv"; break}
             8 {EXIT -1; break}
@@ -247,6 +247,42 @@ function Get-RepoScoreDetails{
 }
 
 
+function Write-JenkinsCSVReport {
+    param (        
+        $repos,
+        $reportName
+    )
+    
+    $summaryReport = "$root\summary_$($reportName)"        
+    $detailedReport = "$root\detailed_$($reportName)"
+
+    $summary = "Repo, Topics`r`n"
+    $detailed = "Repo,Path,Version,Topics`r`n"
+
+    foreach($repo in $repos){
+        $repo | Add-RepoLocally
+        $files = Get-ChildItem -Path $repo.Path -Filter "jenkinsfile*" -recurse
+        $sum = 0 
+
+        foreach($file in $files){
+            $version = $file | Get-Content | Select-String "jenkins-shared-lib-v*"
+
+            if(!$version){
+                $version = 'No SDK'
+            }else{
+                $sum += 1
+            }
+
+            $detailed += "$($repo.Name), $($file.FullName), `"$version`", $($repo.Topics) `r`n"     
+        }
+
+        $summary = "$($repo.Name),$sum/$($files.Count) `r`n"
+    }
+    New-Item -ItemType File -Force -Path $detailedReport -Value "$detailed"
+    New-Item -ItemType File -Force -Path $summaryReport -Value $summary
+
+}
+
 function Write-JenkinsFileReport {
     param (        
         $repos,
@@ -260,11 +296,12 @@ function Write-JenkinsFileReport {
     
     $f = gci -Path $repos.Path -Filter "jenkinsfile*" -recurse 
 
-    $detailed = ($f |%{ if(($_ | gc | select-string "jenkins-shared-lib-v2")){"$($_.FullName)`r`n"}})
+    
+    $detailed = ($f |%{ if(($_ | gc | select-string "jenkins-shared-lib-v2")){"$($_.FullName), `"$($_.Topics)`"`r`n"}})
         
     New-Item -ItemType File -Force -Path $detailedReport -Value "$detailed"
 
-    $summary = ($f |%{ if(($_ | gc | select-string "jenkins-shared-lib-v2")){$($_.FullName.Replace("C:\temp\repos\", "").Split("\")[0] + "`r`n")}}) | Select -Unique
+    $summary = ($f |%{ if(($_ | gc | select-string "jenkins-shared-lib-v2")){$($_.FullName.Replace("C:\temp\repos\", "").Split("\")[0] + ", `"$($_.Topics)`"`r`n")}}) | Select -Unique
 
     $sum = $summary.Count
     $total = $repos.Count
@@ -364,7 +401,7 @@ function Add-RepoLocally{
     }
 
     cd $repo.Path
-
+    git config --global --add safe.directory $repo.Path 
     $currentBranch = git branch --show-current
     $defaultBranch = gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
     
