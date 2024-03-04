@@ -1,11 +1,5 @@
 $root = "c:\temp\repos"
 
-function _Main{
-    #$d = Get-DetailedRepos
-
-    $data = Get-DataFromGraphQL -recentRepoCutoffDateInYears 1
-
-}
 
 function Main {    
     while(1){
@@ -33,8 +27,9 @@ function Get-DataFromMainPrompt{
     Write-Host "2) Most recent repos"
     Write-Host "3) All repos"
     Write-Host "4) Use mock data"
-    Write-Host "5) No data needed"
-    Write-Host "6) Exit"
+    Write-Host "5) Specific Repo"
+    Write-Host "7) No data needed"
+    Write-Host "8) Exit"
     
     $decision = Read-Host
 
@@ -42,14 +37,19 @@ function Get-DataFromMainPrompt{
         1 { Get-DataFromGraphQL -topic 'business-critical' ; break}        
         2 { 
             Write-Host "How many years back should we go"
-            $years = Read-Host 
-
-            Get-DataFromGraphQL -recentRepoCutoffDateInYears $years
+            $years = Read-Host;
+            Get-DataFromGraphQL -recentRepoCutoffDateInYears $years;
+            break;
            }
-        3 { Get-DataFromGraphQL break}
-        4 { Get-MockDataJson break}
-        5 { }
-        6 { EXIT = -1 }#no op on exit
+        3 { Get-DataFromGraphQL; break;}
+        4 { Get-MockDataJson; break;}
+        5 { 
+            Write-Host "What is the name of the repo?"
+            $name = Read-Host;
+            Get-DataFromGraphQL -repoNameFilter $name;
+            break;
+        }
+        6 { EXIT = -1; }#no op on exit
     }
 
     return $data    
@@ -71,9 +71,10 @@ function Invoke-ReportForPrompt{
 
         Write-Host "5) Jenkinsfile report"
         Write-Host "6) Commits per week report"
-        Write-Host "7) Lines of Code report" 
-        Write-Host "8) Exit"
-        Write-Host "9) Help"
+        Write-Host "7) Lines of Code report"
+        Write-Host "8) Generate Backstage Config"  
+        Write-Host "9) Exit"
+        
 
         $action = Read-Host
 
@@ -85,8 +86,9 @@ function Invoke-ReportForPrompt{
             5 {Write-JenkinsCsvReport -repos $data -reportName "jenkinsfile_report.txt"; break}
             6 {Write-CommitsPerWeek -repos $data -reportName "commits_per_week_report.csv"; break}
             7 {Write-Loc -repos $data -reportName "loc_report.csv"; break}
-            8 {EXIT -1; break}
-            9 {Write-Host "coming soon"}
+            8 { & $PSScriptRoot\backstage_init.ps1 -repos $data; break;}
+            9 {EXIT -1; break}
+            
         }
     }
 }
@@ -225,7 +227,6 @@ function Get-RepoHealthScoreDetailed{
 
    return $deets
 }
-
 function Get-RepoScoreDetails{
     param(
         $content
@@ -245,8 +246,6 @@ function Get-RepoScoreDetails{
     return $scores
 
 }
-
-
 function Write-JenkinsCSVReport {
     param (        
         $repos,
@@ -282,7 +281,6 @@ function Write-JenkinsCSVReport {
     New-Item -ItemType File -Force -Path $summaryReport -Value $summary
 
 }
-
 function Write-JenkinsFileReport {
     param (        
         $repos,
@@ -309,7 +307,6 @@ function Write-JenkinsFileReport {
     New-Item -ItemType File -Force -Path $summaryReport -Value "SUM : $sum/$total`r`n`r`n $summary"
 
 }
-
 function Write-CommitsPerWeek{
     param(
         $repos,
@@ -356,7 +353,6 @@ function Get-CommitsPerWeekForRepo{
 
     return "$repo.Name,$average`r`n" 
 }
-
 function Write-DependencyReports{
     param (
         $repos,
@@ -386,8 +382,6 @@ function Write-DependencyReports{
     Add-Content -Path $summaryReport -Value "total,$($prsAll.Count)"
        
 }
-
-
 function Add-RepoLocally{
     param(
         [Parameter(position=0, ValueFromPipeline)]
@@ -418,17 +412,17 @@ function Add-RepoLocally{
 
     cd $originalPath
 }
-
-
-
 function Get-DataFromGraphQL{
     param(
     [string] $organization = "AirMilesLoyaltyInc",
     [decimal]$recentRepoCutoffDateInYears = 0,
-    [string]$topic = ""
+    [string]$topic = "",
+    [string]$repoNameFilter = ""
+
     )
 
-    $filter = @("org:$organization")
+
+    $filter = @($repoNameFilter, "org:$organization")
 
     if($recentRepoCutoffDateInYears){
         $cutoff = (get-date).AddYears($recentRepoCutoffDateInYears *-1).ToString('yyyy-MM-ddTHH:mm:ss')
@@ -437,6 +431,10 @@ function Get-DataFromGraphQL{
 
     if($topic){
         $filter += "topic:$topic"
+    }
+
+    if($repoName){
+        $filter +=  "name:$repoName"
     }
 
     $graph =  Join-Path -Path $PSScriptRoot -ChildPath "metrics.graphql"
@@ -460,50 +458,18 @@ function Get-DataFromGraphQL{
             Archived = $_.isArchived
             Disabled = $_.isDisabled
             #Contributors = $_.contributors
-            Languages = $_.languages.nodes.names
+            Languages = $_.languages.nodes.name
         }    
     }
-    return $repos
-}
 
-
-function Get-DetailedRepos{
-    param(
-        $orgName = "LoyaltyOne"
-    )
-
-    $i = 1
-    $repos = gh api "orgs/$orgName/repos?page=$i&per_page=100" | ConvertFrom-Json
-    $buffer = $repos
-    while($buffer){
-        $i = $i + 1
-        $buffer = gh api "orgs/$orgName/repos?page=$i&per_page=100" | ConvertFrom-Json       
-        $repos += $buffer
-    } 
-
-   $formatted =  $repos | ForEach-Object{   
-        [PSCustomObject]@{
-            Name = $_.name
-            Url = $_.url
-            Path = "$root\$($_.name)"
-            Date = $_.pushed_at
-            Pushed = $_.pushed_at
-            Updated = $_.updated_at
-            Repo = $_.full_name
-            Topics = $_.topics
-            Archived = $_.archived
-            Disabled = $_.disabled
-            Contributors = $((Get-Contributors -repoName $_.name) -Join ";")
-            Languages = $(Get-Languages -repoName $_.name )
-        }
-
+    $results = if($repoNameFilter){
+        @($repos | Where-Object{$_.Name -eq $repoNameFilter})
+    }else{
+        $repos
     }
 
-    $formatted
-
-} 
-
-
+    return $results
+}
 function Write-Loc {
     param (
         $repos,
@@ -535,8 +501,6 @@ function Write-Loc {
         Add-Content -Path $summaryReport -Value "$($repo.Name),$($repo.Date),$total"     
     }
 }
-
-
 function Get-MockDataJson{
     [CmdletBinding()]
     param(

@@ -1,0 +1,36 @@
+query($endCursor: String, $filter: String!){
+        search(
+          first: 100
+          after:$endCursor
+          query: $filter
+          type: REPOSITORY
+        ){
+          pageInfo {
+            endCursor
+            hasNextPage
+          }
+          nodes {
+         		   ... on Repository {
+              name
+              url
+              nameWithOwner,
+              description,
+              languages(first: 100) {
+                nodes {
+                  name
+                }
+              }
+
+               repositoryTopics(first:100) {
+                edges {
+                  node {
+                    topic{
+                        name
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+}
