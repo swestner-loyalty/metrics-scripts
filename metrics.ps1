@@ -1,6 +1,13 @@
 $root = "c:\temp\repos"
+$ErrorActionPreference = "Continue"
+$UpdateOnlyIfNotExists = $true
 
+function _Main {
 
+    $data = Get-MockDataJson
+    $prefix = "$(Get-Date -Format "MMddyyyy-HHmmss")_"
+    Write-RepoScorecardReport -repos $data -reportName "$($prefix)summary_scorecard_report.csv"
+}
 function Main {    
     while(1){
                     
@@ -41,7 +48,7 @@ function Get-DataFromMainPrompt{
             Get-DataFromGraphQL -recentRepoCutoffDateInYears $years;
             break;
            }
-        3 { Get-DataFromGraphQL; break;}
+        3 { Get-AllRepos; break;}
         4 { Get-MockDataJson; break;}
         5 { 
             Write-Host "What is the name of the repo?"
@@ -78,14 +85,16 @@ function Invoke-ReportForPrompt{
 
         $action = Read-Host
 
+        $prefix = "$(Get-Date -Format "MMddyyyy-HHmmss")_"
+
         switch($action){
-            1 {Write-RepoScorecardReport -repos $data -reportName "($prefix)summary_scorecard_report.csv"; break}
-            2 {Write-RepoScorecardReportDetailed -repos $data -reportName "($prefix)detailed_scorecard_report.csv";break}
-            3 {Write-OwnershipReport -repos $data -reportName "($prefix)ownership_report.csv"; break}
-            4 {Write-DependencyReports -repos $data -reportName "($prefix)dependency_report.csv" ; break}
-            5 {Write-JenkinsCsvReport -repos $data -reportName "jenkinsfile_report.txt"; break}
-            6 {Write-CommitsPerWeek -repos $data -reportName "commits_per_week_report.csv"; break}
-            7 {Write-Loc -repos $data -reportName "loc_report.csv"; break}
+            1 {Write-RepoScorecardReport -repos $data -reportName "$($prefix)summary_scorecard_report.csv"; break}
+            2 {Write-RepoScorecardReportDetailed -repos $data -reportName "$($prefix)detailed_scorecard_report.csv";break}
+            3 {Write-OwnershipReport -repos $data -reportName "$($prefix)ownership_report.csv"; break}
+            4 {Write-DependencyReports -repos $data -reportName "$($prefix)dependency_report.csv" ; break}
+            5 {Write-JenkinsCsvReport -repos $data -reportName "$($prefix)jenkinsfile_report.txt"; break}
+            6 {Write-CommitsPerWeek -repos $data -reportName "$($prefix)commits_per_week_report.csv"; break}
+            7 {Write-Loc -repos $data -reportName "$($prefix)loc_report.csv"; break}
             8 { & $PSScriptRoot\backstage_init.ps1 -repos $data; break;}
             9 {EXIT -1; break}
             
@@ -119,21 +128,28 @@ function Write-RepoScorecardReport{
     )
 
     $summaryReport = "$root\$($reportName)"        
-    $summaryHeader = "repo,score,topics,notes`r`n"
+    $summaryHeader = "repo,complete%,l1%,l2%,l1-complete,l2-complete,topics,notes`r`n"
 
     New-Item -ItemType File -Force -Path $summaryReport -Value $summaryHeader
 
-    $repos |%{
-        Add-RepoLocally -Repo $_
-        $summary = Get-RepoHealthScoreSummary -repo $_
+    foreach($repo in $repos){
+        
+        try{
+            Add-RepoLocally -Repo $repo
+            $summary = Get-RepoHealthScoreSummary -repo $repo
+        }catch{
+            $summary = "$($repo.Name), N/A,N/A,N/A,N/A,N/A,N/A,error : $_ `r`n"
+        }
+        
         Add-Content -Path $summaryReport -Value $summary
     }
 
+    
     Write-Host (gc $summaryReport)
      
 }
 
-function Get-RepoHealthScoreSummary{
+function _Get-RepoHealthScoreSummary{
     param(        
        $repo
    )
@@ -154,8 +170,61 @@ function Get-RepoHealthScoreSummary{
    
    $score = ($completed / $total) * 100
 
-   return $format -f $repo.Name, $score, $topics, ''
+   return $format -f $repo.Name, $score, $topics, $scorecard
 }
+
+function Get-RepoHealthScoreSummary{
+    param(        
+       $repo
+   )
+   
+   $format = "{0},{1},{2},{3},{4},{5},{6},{7}"
+   
+   $scorecard = ((gci -Path $repo.Path) | where {$_.Name -match '(scorecard|level\d)\.md'}).FullName
+   $topics = $repo.Topics -join ';'
+
+   $retired = $repo.Archived -or $repo.Disabled
+   
+   if(!$scorecard){
+       return $format -f $repo.Name, 0,0,0,$false,$false, $topics, 'no scorecard'
+   }
+
+   if($retired){
+    return $format -f $repo.Name, 0,0,0,$false,$false, $topics, 'retired'
+   }
+
+   $content = Get-Content $scorecard
+
+   $evaluator = Get-ScorecardEvaluator
+   $scores = $evaluator.GetScores($content)
+   
+   $level1 = $scores | Where-Object{$_.Level -eq 1 -and $_.Completed -eq $true}
+   $level2 = $scored | Where-Object{$_.Level -eq 2 -and $_.Completed -eq $true}
+
+   $level1Score = if($level1.Count -gt 0){($level1.Count) / ($evaluator.CountLevel(1))}else{0}
+   $level2Score = if($level2.Count -gt 0){($level2.Count) / ($evaluator.CountLevel(2))}else{0}
+   
+   $level1Completed = $level1Score -eq 1
+   $level2Completed = $level2score -eq 1
+
+   $count = $level1.Count + $level2.Count
+   $score = if($count -gt 0){ $count / ($evaluator.CountLevel(1) + $evaluator.CountLevel(2))}else{0}
+   return $format -f $repo.Name, $score, $level1Score, $level2Score,$level1Completed, $level2Completed, $topics, ""
+}
+
+$global:scorecardEvaluator = $null
+
+function Get-ScorecardEvaluator{
+
+    if($global:scorecardEvaluator){
+        return $global:scorecardEvaluator
+    }
+    
+    $global:scorecardEvaluator = [ScorecardEvaluator]::new()
+    return $global:scorecardEvaluator
+
+}
+
 function Write-RepoScorecardReportDetailed{
     param(
         $repos,
@@ -227,7 +296,7 @@ function Get-RepoHealthScoreDetailed{
 
    return $deets
 }
-function Get-RepoScoreDetails{
+function Get-RepoScoreDetails{  
     param(
         $content
     )
@@ -236,7 +305,7 @@ function Get-RepoScoreDetails{
 
     $scores = @{}
 
-    foreach ($line in $content){        
+    foreach ($line in $content){ 
         $match = $expression.match($line)
 
         if($match.Success){
@@ -388,38 +457,120 @@ function Add-RepoLocally{
         $repo
     )
 
+    
+    Set-Alias iu Invoke-Utility
+
     $originalPath = (gi .).FullName
 
-    if(!(Test-Path $repo.Path)){
-        git clone $repo.Url --depth=1 $repo.Path                
-    }
-
-    cd $repo.Path
-    git config --global --add safe.directory $repo.Path 
-    $currentBranch = git branch --show-current
-    $defaultBranch = gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
+    $repoExists = Test-Path $repo.Path
     
-    if($currentBranch -ne $defaultBranch){
-        git stash       
+    if($UpdateOnlyIfNotExists -and $repoExists){
+        return
     }
 
-    #git reset --hard origin/$defaultBranch
-    #git pull $defaultBranch
+    try{
+        if(!$repoExists){
+        iu git clone $repo.Url --depth=1 $repo.Path                
+        }
 
-    git fetch origin $defaultBranch
-    git merge -s recursive -X theirs origin/$defaultBranch
+        cd $repo.Path
+        $currentBranch = git branch --show-current
+        $defaultBranch = gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
+        
+        if($currentBranch -ne $defaultBranch){
+            git stash       
+        }
 
+        #git reset --hard origin/$defaultBranch
+        #git pull $defaultBranch
 
-    cd $originalPath
+        iu git fetch origin $defaultBranch
+        iu git merge -s recursive -X theirs origin/$defaultBranch
+    }catch{
+        Throw
+    }finally{
+        cd $originalPath
+    }    
 }
+
+
+class Repository{
+    [string] $Name
+    [string] $Url 
+    [string] $Path 
+    [string] $Date 
+    [string] $Pushed
+    [string] $Updated
+    [string] $Repo
+    [array] $Topics
+    [bool] $Archived
+    [bool] $Disabled
+    [array] $Languages
+}
+
+function Get-DataFromCSV{
+    param($path)
+
+    Import-Csv -Path $path
+    $repos = $nodes | ForEach-Object{      
+        [PSCustomObject]@{
+            Name = $_.name
+            Url = $_.url
+            Path = "$root\$($_.name)"
+            Date = $_.pushedAt
+            Pushed = $_.pushedAt
+            Updated = $_.updatedAt
+            Repo = $_.nameWithOwner
+            Topics = $_.repositoryTopics.edges.node.topic.name
+            Archived = $_.isArchived
+            Disabled = $_.isDisabled
+            #Contributors = $_.contributors
+            Languages = $_.languages.nodes.name
+
+        }    
+    }
+
+    $repos = $nodes | ForEach-Object{      
+        [PSCustomObject]@{
+            Name = $_.name
+            Url = $_.url
+            Path = "$root\$($_.name)"
+            Date = $_.pushedAt
+            Pushed = $_.pushedAt
+            Updated = $_.updatedAt
+            Repo = $_.nameWithOwner
+            Topics = $_.repositoryTopics.edges.node.topic.name
+            Archived = $_.isArchived
+            Disabled = $_.isDisabled
+            #Contributors = $_.contributors
+            Languages = $_.languages.nodes.name
+        }    
+    }
+
+}
+
+#this method is needed to work around the 1000 item limit imposed by search
+function Get-AllRepos
+{
+       $early = Get-DataFromGraphQL -between "2000-01-01..2017-12-31"
+       $mid = Get-DataFromGraphQL -between "2018-01-01..2020-12-31"
+       $recent = Get-DataFromGraphQL -between "2021-01-01..2024-12-31"
+
+       $all = $early + $mid + $recent
+
+       return $all
+}
+
 function Get-DataFromGraphQL{
     param(
     [string] $organization = "AirMilesLoyaltyInc",
     [decimal]$recentRepoCutoffDateInYears = 0,
     [string]$topic = "",
-    [string]$repoNameFilter = ""
+    [string]$repoNameFilter = "",
+    [string]$between = ""
 
     )
+
 
 
     $filter = @($repoNameFilter, "org:$organization")
@@ -427,6 +578,10 @@ function Get-DataFromGraphQL{
     if($recentRepoCutoffDateInYears){
         $cutoff = (get-date).AddYears($recentRepoCutoffDateInYears *-1).ToString('yyyy-MM-ddTHH:mm:ss')
         $filter +=  "pushed:>$cutoff"
+    }
+
+    if($between){
+        $filter +=  "created:$between"
     }
 
     if($topic){
@@ -501,6 +656,35 @@ function Write-Loc {
         Add-Content -Path $summaryReport -Value "$($repo.Name),$($repo.Date),$total"     
     }
 }
+
+function Invoke-Utility {
+    <#
+    .SYNOPSIS
+    Invokes an external utility, ensuring successful execution.
+    
+    .DESCRIPTION
+    Invokes an external utility (program) and, if the utility indicates failure by 
+    way of a nonzero exit code, throws a script-terminating error.
+    
+    * Pass the command the way you would execute the command directly.
+    * Do NOT use & as the first argument if the executable name is not a literal.
+
+    Reference : https://stackoverflow.com/questions/48864988/powershell-with-git-command-error-handling-automatically-abort-on-non-zero-exi
+    
+    .EXAMPLE
+    Invoke-Utility git push
+    
+    Executes `git push` and throws a script-terminating error if the exit code
+    is nonzero.
+    #>
+      $exe, $argsForExe = $Args
+      # Workaround: Prevents 2> redirections applied to calls to this function
+      #             from accidentally triggering a terminating error.
+      #             See bug report at https://github.com/PowerShell/PowerShell/issues/4002
+      $ErrorActionPreference = 'Continue'
+      try { & $exe $argsForExe } catch { Throw } # catch is triggered ONLY if $exe can't be found, never for errors reported by $exe itself
+      if ($LASTEXITCODE) { Throw "$exe indicated failure (exit code $LASTEXITCODE; full command: $Args)." }
+    }
 function Get-MockDataJson{
     [CmdletBinding()]
     param(
@@ -602,5 +786,114 @@ function Get-MockDataJson{
 
     return $data[0..($numItems - 1)]
 }
+
+
+class ScorecardEvaluator {
+    hidden [array]$Map
+
+    ScorecardEvaluator() {
+        $this.Map = @([ScoreCardMapping]::new("Repo has code quality metrics with base level of compliance set", "(?i).*base level.*"       , 1),
+            [ScoreCardMapping]::new("Repo has OpenAPI documentation for all public endpoints"        , "(?i).*open\s*api"         , 1),
+            [ScoreCardMapping]::new("Repo follows standardized project structure"                    , "(?i).*project structure"  , 1),
+            [ScoreCardMapping]::new("Repo is marked 'business-critical' in the git topic"            , "(?i).*business-critical"  , 1),
+            [ScoreCardMapping]::new("Repo owner indicated in the git topic"                          , "(?i).*owner.*git topic"   , 1),   
+            [ScoreCardMapping]::new("Repo has a code owner file"                                     , "(?i).*code owner file"    , 1),
+            [ScoreCardMapping]::new("Repo has testing with baseline coverage established"            , "(?i).*baseline coverage"  , 1),
+            [ScoreCardMapping]::new("Repo has a well-written MD that covers the following"           , "(?i).*written MD"         , 1),
+            [ScoreCardMapping]::new("Grade 'A' rating in code quality metrics"                       , "(?i).*Grade.*A"           , 2),
+            [ScoreCardMapping]::new("The CD pipeline requires no manual steps"                       , "(?i).*no manual steps"    , 2),
+            [ScoreCardMapping]::new("Test automation can be run during CI"                           , "(?i).*test automation"    , 2),
+            [ScoreCardMapping]::new("Repo has 80% coverage"                                          , "(?i).*80% coverage"       , 2))
+    }
+
+    [array] GetScores($content) {
+        
+        [regex]$expression = ".*\[(?<score>.*)\]\s*(?<desc>.*)?"
+
+        $scores = @()
+    
+        foreach ($line in $content){        
+            $match = $expression.match($line)
+    
+            if($match.Success){
+                
+                $desc = $match.Groups['desc'].Value
+                $mapped = $this.GetMapped($desc)
+                if($mapped){
+                    $completed = $this.IsComplete($match.Groups['score'].Value.Trim())
+                    $level = $mapped.Level
+                    $item = [ScoreCardItem]::new($mapped.Desc, $completed, $level);
+                    $scores += $item
+                }
+            }
+        }
+        return $scores
+    }
+
+    [int] CountLevel($level) {
+        return ($this.Map.Level | Where-Object {$_ -eq $level}).Count
+    }
+
+    hidden [int] GetLevel($line) {
+        $key = $line.Trim(':').Trim()
+
+        if ($this.Map.ContainsKey($key)) {
+            return $this.Map[$key]
+        } else {
+            return 0
+        }
+    }
+
+    hidden [ScoreCardMapping] GetMapped($line){
+        $matched = $this.Map | Where-Object{$line -match $_.Regex }
+
+        if($matched -is [array]){
+            throw "too many matches for $line. Matched $matched"
+        }
+
+        return $matched
+    }
+    
+    hidden [bool] IsComplete($line) {
+        return $line -match '\s*[xX]\s*'
+    }
+}
+
+Class ScoreCardMapping{
+
+    
+    [string] $Desc
+    [string] $Regex
+    [int]    $Level
+
+    ScoreCardMapping([string] $Desc, [string] $Regex, [int] $Level){
+        $this.Init(@{Desc=$Desc;Regex=$Regex;Level=$Level})
+    }
+
+    [void] Init([hashtable]$Properties) {
+        foreach ($Property in $Properties.Keys) {
+            $this.$Property = $Properties.$Property
+        }
+    }
+}
+Class ScoreCardItem{
+
+    
+    [string] $Desc
+    [bool]   $Completed
+    [int]    $Level
+
+    ScoreCardItem([string] $Desc, [bool] $Completed, [int] $Level){
+        $this.Init(@{Desc=$Desc;Completed=$Completed;Level=$Level})
+
+    }
+
+    [void] Init([hashtable]$Properties) {
+        foreach ($Property in $Properties.Keys) {
+            $this.$Property = $Properties.$Property
+        }
+    }
+}
+
 
 Main
