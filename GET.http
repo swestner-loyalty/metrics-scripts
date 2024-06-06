@@ -1,0 +1,103 @@
+###GETs
+
+####
+#### separate url for admin examples
+####
+
+POST /offers-admin
+GET /offers
+
+POST /offers
+GET  /offers
+GET  /offers/collectors
+
+POST /offers
+GET  /offers
+
+###invalid use of singleton
+GET /offers-admin
+GET /offers/admin
+
+###unnessecary nesting
+GET /offers-admin/offers
+GET /offers/admin/offers
+
+###aceptable singleton, does not address lists
+GET /offers/{id}/admin
+
+#########
+######### Same url for all offers resource
+#########
+
+Authorization: {admin}
+GET /offers
+GET /offers/associations
+GET /offers/{id}/associations
+
+###caching friendly
+GET /offers?role=admin
+GET /offers#admin
+
+Response
+{
+ "id" : 12345,   
+ "name"  : "metro yorgurt",
+ "start" : "04012024",
+ "end"   : "04092024",
+ "views" : "450000",
+ "frcopy": "Délicieux yaourt",
+ "encopy": "Yummy yogurt"
+},...
+
+Auth : {user}
+Accept-Language : en-CA
+GET /offers
+
+Response
+{
+ "id" : 12345,  
+ "start" : "04012024",
+ "end"   : "04092024",
+ "copy" : "Yummy yogurt"
+},...
+
+###POSTS
+Auth : {user}
+POST /offers
+PUT /offers/{id}
+Response : 401
+
+Auth : {admin}
+POST /offers
+
+{
+    "issue" : 12,
+    "start" : 04042024,
+    "end" : 20042024,
+    "pay" :  "",
+    "offer-type" : "",
+
+    "product" : {"stuff" : "yes"}
+    "pay" : null 
+    
+
+}
+
+PUT /offers/{id}
+Response : 201
+
+###POST Alt 2
+###Useful to prevent users from having to sift through unnessecary parameters
+###Also possible to solve through OpenAPI specification
+Auth : {admin}
+POST /offers/base
+POST /offers/product
+POST /offers/spend
+POST /offers/pay
+POST /offers/frequency
+POST /offers/pay+frquency+product
+
+
+public void Post(object pay, freq, prod) 
+
+Response : 201

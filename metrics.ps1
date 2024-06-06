@@ -8,6 +8,7 @@ function _Main {
     $prefix = "$(Get-Date -Format "MMddyyyy-HHmmss")_"
     Write-RepoScorecardReport -repos $data -reportName "$($prefix)summary_scorecard_report.csv"
 }
+
 function Main {    
     while(1){
                     
@@ -35,6 +36,7 @@ function Get-DataFromMainPrompt{
     Write-Host "3) All repos"
     Write-Host "4) Use mock data"
     Write-Host "5) Specific Repo"
+    Write-Host "6) From file with repo names"
     Write-Host "7) No data needed"
     Write-Host "8) Exit"
     
@@ -56,7 +58,9 @@ function Get-DataFromMainPrompt{
             Get-DataFromGraphQL -repoNameFilter $name;
             break;
         }
-        6 { EXIT = -1; }#no op on exit
+        6 {Get-DataFromFile;break}
+        7 { break; }
+        8 { EXIT = -1; }#no op on exit
     }
 
     return $data    
@@ -102,6 +106,20 @@ function Invoke-ReportForPrompt{
     }
 }
 
+function Get-DataFromFile{
+    
+    Write-Host "Please enter the path to the file"
+    $path = Read-Host
+    $content = Get-Content $path
+    $all = Get-AllRepos
+
+    $filtered = $all |%{
+        if ($content -contains $_.name){
+            $_
+        }
+    }
+    return $filtered
+}
 function Write-OwnershipReport{
     param($reportName)
 
